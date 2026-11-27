@@ -132,10 +132,14 @@ function draw(){
   };
   line(tipBuf, "#3f8", 1);
   line(hanBuf, "#39f", 1);
-  // 掌压单独一条：跟加速度的自动放大无关，只按 0–4095 映射到底部 35%
+  // 掌压单独一条：占底部 30%，自己按这一窗的最小/最大铺开，静止时也能看见
+  let fmin = 4095, fmax = 0;
+  for (let i=0;i<N;i++){ if (fsrBuf[i] < fmin) fmin = fsrBuf[i]; if (fsrBuf[i] > fmax) fmax = fsrBuf[i]; }
+  if (fmax - fmin < 60){ fmax = fmin + 60; }
   ctx.strokeStyle = "#fa3"; ctx.lineWidth = 2; ctx.beginPath();
   for (let i=0;i<N;i++){
-    const x = i/(N-1)*w, y = h - (fsrBuf[i]/4095)*(h*0.35);
+    const v = (fsrBuf[i] - fmin) / (fmax - fmin);
+    const x = i/(N-1)*w, y = h - h*0.04 - v * h*0.28;
     i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
   }
   ctx.stroke();
