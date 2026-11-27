@@ -132,7 +132,13 @@ function draw(){
   };
   line(tipBuf, "#3f8", 1);
   line(hanBuf, "#39f", 1);
-  line(fsrBuf, "#fa3", h*0.35/4095);
+  // 掌压单独一条：跟加速度的自动放大无关，只按 0–4095 映射到底部 35%
+  ctx.strokeStyle = "#fa3"; ctx.lineWidth = 2; ctx.beginPath();
+  for (let i=0;i<N;i++){
+    const x = i/(N-1)*w, y = h - (fsrBuf[i]/4095)*(h*0.35);
+    i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+  }
+  ctx.stroke();
   requestAnimationFrame(draw);
 }
 requestAnimationFrame(draw);
