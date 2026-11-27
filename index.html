@@ -45,6 +45,15 @@ details input{width:100%;margin:6px 0;padding:7px 9px;border-radius:7px;border:1
 #fallBanner button{margin-left:auto;background:#fff;color:#911;font-weight:700}
 .line.fall{border-left-color:#ff5252;background:#2a1416;color:#ffd9d9;font-weight:600}
 #cFall b{color:#ff7a7a}
+/* 跌倒记录 */
+#fallHist{max-height:230px;overflow-y:auto;margin-top:8px;border:1px solid #24333f;border-radius:10px;background:#0f1a22}
+#fallHist .hl{display:flex;gap:8px;align-items:baseline;padding:7px 10px;border-bottom:1px solid #1b2731;font-size:13px}
+#fallHist .hl:last-child{border-bottom:none}
+#fallHist .hl .t{color:#e6eef7;font-weight:600;white-space:nowrap}
+#fallHist .hl .d{color:#8fa3b8;font-size:12px}
+#fallHist .hl .tag{margin-left:auto;font-size:11px;border:1px solid #2b4a60;border-radius:6px;padding:1px 6px;color:#7fd1ff;white-space:nowrap}
+#fallHist .hl.real .tag{color:#ff9a9a;border-color:#5a2a2e}
+#fallHistSum{font-weight:400;font-size:12px;color:#8fa3b8;margin-left:6px}
 </style>
 </head>
 <body>
@@ -84,6 +93,10 @@ details input{width:100%;margin:6px 0;padding:7px 9px;border-radius:7px;border:1
       <div class="cell" id="cPress"><b>—</b><span>掌压 峰/均</span></div>
       <div class="cell" id="cFall"><b>—</b><span>跌倒</span></div>
     </div>
+
+    <h3 style="margin-top:14px">跌倒记录<span id="fallHistSum">共 0 次</span></h3>
+    <div id="fallHist"></div>
+    <button class="ghost" id="btnHistClear" style="margin-top:8px;font-size:12px">清空记录</button>
 
     <h3 style="margin-top:14px">AI 助手</h3>
     <div id="ai"><div class="line rule">还没开始说。接上拐杖（或点「回放演示」）我就能看着指标说话。<small>—</small></div></div>
@@ -324,8 +337,9 @@ function fallSound(){
   }catch(e){ /* 静音就别响，检测照样在 */ }
 }
 
-function triggerFall(now){
+function triggerFall(now, info){
   fallActive = true; lastFallAt = now; fallCount++;
+  recordFall(info);
   document.getElementById("fallBanner").classList.add("show");
   document.getElementById("fallTime").textContent = hhmmss(new Date()) + " · 已经响了铃";
   fallSound();
@@ -363,7 +377,7 @@ function fallCheck(tip, now){
       }
     } else { lyingSince = 0; lyingWarned = false; }
   } else if (fallStage === 1){
-    if (mag > FALL_CFG.impactG){ fallStage = 2; impactAt = now; impactPeak = mag; }
+    if (mag > FALL_CFG.impactG){ fallStage = 2; impactAt = now; impactPeak = Math.max(impactPeak, mag); }
     else if (now - freeAt > FALL_CFG.impactWinMs){ fallStage = 0; freeCnt = 0; }
   } else if (fallStage === 2){
     if (now - impactAt > FALL_CFG.stillMs){
@@ -371,12 +385,82 @@ function fallCheck(tip, now){
       const mean = seg.reduce((s,p)=>s+p.v,0) / Math.max(1, seg.length);
       const sd = Math.sqrt(seg.reduce((s,p)=>s+(p.v-mean)*(p.v-mean),0) / Math.max(1, seg.length));
       const lying = tilt === null ? true : tilt > FALL_CFG.lyingTilt;
-      if (sd < FALL_CFG.stillSd && lying) triggerFall(now);
+      if (sd < FALL_CFG.stillSd && lying) triggerFall(now, { mag: impactPeak, tilt });
       fallStage = 0; freeCnt = 0;
     }
   }
   if (fallActive && now - lastFallAt > FALL_CFG.bannerHoldMs) clearFall();
 }
+
+/* ============ 3.6 跌倒历史 ============ */
+// 真摔的存手机本地（localStorage），关掉网页再开还在；回放演示的只留在这一次里，不混进真记录。
+const HIST_KEY = "caneFallHist", HIST_MAX = 60;
+let realHist = [], demoHist = [];
+try{
+  const raw = JSON.parse(localStorage.getItem(HIST_KEY) || "[]");
+  if (Array.isArray(raw)) realHist = raw.filter(e => e && e.ms);
+}catch(e){ realHist = []; }
+
+const pad2 = n => String(n).padStart(2,"0");
+function fmtWhen(ms){
+  const d = new Date(ms);
+  const wd = "日一二三四五六"[d.getDay()];
+  return `${d.getMonth()+1}月${d.getDate()}日 周${wd} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+function agoText(ms){
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return "刚刚";
+  if (m < 60) return m + " 分钟前";
+  const h = Math.round(m / 60);
+  if (h < 24) return h + " 小时前";
+  return Math.round(h / 24) + " 天前";
+}
+
+function renderHist(){
+  const box = document.getElementById("fallHist");
+  const sum = document.getElementById("fallHistSum");
+  const all = realHist.concat(demoHist).sort((a,b)=> b.ms - a.ms).slice(0, HIST_MAX);
+  if (realHist.length){
+    sum.textContent = `共 ${realHist.length} 次` + (demoHist.length ? ` · 演示 ${demoHist.length} 次` : "") + ` · 最近 ${agoText(all[0].ms)}`;
+  } else {
+    sum.textContent = demoHist.length ? `演示 ${demoHist.length} 次` : "共 0 次";
+  }
+  if (!all.length){
+    box.innerHTML = '<div class="hint" style="padding:10px">还没有摔过。真摔一次会记在这儿，或者点「回放演示」看一遍。</div>';
+    return;
+  }
+  box.innerHTML = all.map(e => {
+    const d = [];
+    if (e.mag) d.push("砸地 " + Number(e.mag).toFixed(1) + " g");
+    if (e.tilt != null) d.push("倾角 " + Math.round(e.tilt) + "°");
+    return '<div class="hl ' + (e.demo ? "demo" : "real") + '">'
+      + '<span class="t">' + fmtWhen(e.ms) + '</span>'
+      + '<span class="d">' + (d.join(" · ") || "—") + '</span>'
+      + '<span class="tag">' + (e.demo ? "回放" : "真实") + '</span></div>';
+  }).join("");
+}
+
+function recordFall(info){
+  const rec = {
+    ms: Date.now(),
+    mag: info && info.mag ? Number(info.mag).toFixed(2) : 0,
+    tilt: info && info.tilt != null ? Math.round(info.tilt) : null,
+    demo: !!replayTimer
+  };
+  (rec.demo ? demoHist : realHist).unshift(rec);
+  if (realHist.length > HIST_MAX) realHist.length = HIST_MAX;
+  if (demoHist.length > 20) demoHist.length = 20;
+  if (!rec.demo){ try{ localStorage.setItem(HIST_KEY, JSON.stringify(realHist)); }catch(e){ /* 隐私模式存不了就这样 */ } }
+  renderHist();
+}
+
+document.getElementById("btnHistClear").onclick = () => {
+  if (!confirm("清空所有跌倒记录？（真摔的和演示的都清）")) return;
+  realHist = []; demoHist = [];
+  try{ localStorage.removeItem(HIST_KEY); }catch(e){}
+  renderHist();
+};
+renderHist();
 
 function paint(m){
   if (!m) return;
@@ -391,7 +475,7 @@ function paint(m){
   set("cTilt",  m.tilt,   m.tilt > 15 ? "bad" : m.tilt > 10 ? "warn" : "");
   set("cSway",  m.sway,   "");
   set("cPress", m.press_peak.toFixed(2) + " / " + m.press_mean.toFixed(2), m.press_mean < 0.1 ? "warn" : "");
-  set("cFall",  fallCount ? fallCount + " 次" : "0 次", fallActive ? "bad" : "");
+  set("cFall",  realHist.length ? realHist.length + " 次" : (demoHist.length ? "演示 " + demoHist.length : "0 次"), fallActive ? "bad" : "");
 }
 
 /* ============ 4. AI 那一层 ============ */
