@@ -2,60 +2,107 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>智能防滑拐杖 · 实时曲线</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>智能防滑拐杖 · 实时曲线 + AI 助手</title>
 <style>
-body{font-family:"Microsoft YaHei",sans-serif;margin:0;background:#111;color:#eee}
-header{padding:10px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-button{font-size:16px;padding:8px 18px;border-radius:8px;border:0;background:#2d7;color:#062;font-weight:700;cursor:pointer}
-button:disabled{background:#333;color:#777;cursor:default}
-.stat{font-size:14px;color:#9ab}
-canvas{display:block;width:100%;height:60vh;background:#0b0b0b}
-.legend{display:flex;gap:18px;padding:6px 14px;font-size:14px}
-.sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
-#flag{font-size:22px;font-weight:700;color:#555;padding:4px 14px;border-radius:8px;border:1px solid #333}
-#flag.on{color:#fff;background:#c22}
-pre{padding:0 14px;color:#666;font-size:12px;max-height:20vh;overflow:auto}
+*{box-sizing:border-box}
+body{font-family:"Microsoft YaHei",system-ui,sans-serif;margin:0;background:#0f1115;color:#e8eef5}
+header{padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #1d232c}
+button{font-size:15px;padding:8px 16px;border-radius:8px;border:0;background:#2d7;color:#062;font-weight:700;cursor:pointer}
+button.ghost{background:#1b2028;color:#9fb3c8;border:1px solid #2a323d}
+button:disabled{background:#222;color:#666;cursor:default}
+.stat{font-size:13px;color:#8ea4b8}
+#flag{font-size:16px;font-weight:700;color:#7a8b9c;padding:4px 12px;border-radius:8px;border:1px solid #2a323d}
+#flag.on{color:#fff;background:#c22;border-color:#c22}
+main{display:flex;gap:0;flex-wrap:wrap}
+.left{flex:1 1 560px;min-width:320px;border-right:1px solid #1d232c}
+.right{flex:1 1 380px;min-width:300px;padding:12px 14px}
+canvas{display:block;width:100%;height:46vh;background:#080a0d}
+.legend{display:flex;gap:16px;padding:8px 14px;font-size:13px;color:#9fb3c8;flex-wrap:wrap}
+.sw{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+pre{padding:0 14px;color:#5f7285;font-size:12px;max-height:8vh;overflow:auto;margin:6px 0}
+h3{margin:2px 0 8px;font-size:14px;color:#7f95a9;font-weight:600;letter-spacing:.5px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.cell{background:#151a21;border:1px solid #202832;border-radius:10px;padding:8px 10px}
+.cell b{display:block;font-size:22px;font-weight:700;color:#7fe3b0;line-height:1.2}
+.cell span{font-size:12px;color:#7f95a9}
+.cell.warn b{color:#ffc861}
+.cell.bad b{color:#ff7a7a}
+#ai{display:flex;flex-direction:column;gap:8px;max-height:38vh;overflow:auto;margin-top:6px}
+.line{background:#151a21;border-left:3px solid #2d7;border-radius:0 8px 8px 0;padding:8px 10px;font-size:14px;line-height:1.5}
+.line.rule{border-left-color:#5c6b7d;color:#9fb3c8}
+.line small{display:block;color:#5f7285;font-size:11px;margin-top:3px}
+details{margin-top:10px;background:#131820;border:1px solid #1f2732;border-radius:10px;padding:8px 10px}
+summary{cursor:pointer;color:#8ea4b8;font-size:13px}
+details input{width:100%;margin:6px 0;padding:7px 9px;border-radius:7px;border:1px solid #2a323d;background:#0c1015;color:#dbe6f1;font-size:13px}
+.hint{font-size:12px;color:#6d7f92;line-height:1.5}
 </style>
 </head>
 <body>
 <header>
   <button id="btn">连接拐杖</button>
+  <button id="btnReplay" class="ghost">回放演示</button>
+  <button id="btnCal" class="ghost">校准竖直</button>
   <span class="stat" id="stat">未连接</span>
   <span id="flag">等待数据</span>
 </header>
-<div class="legend">
-  <span><i class="sw" style="background:#3f8"></i>杖尖竖直加速度</span>
-  <span><i class="sw" style="background:#39f"></i>手柄竖直加速度</span>
-  <span><i class="sw" style="background:#fa3"></i>掌压</span>
-</div>
-<canvas id="cv"></canvas>
-<pre id="log"></pre>
+
+<main>
+  <div class="left">
+    <div class="legend">
+      <span><i class="sw" style="background:#3f8"></i>杖尖加速度</span>
+      <span><i class="sw" style="background:#39f"></i>手柄加速度</span>
+      <span><i class="sw" style="background:#fa3"></i>掌压</span>
+    </div>
+    <canvas id="cv"></canvas>
+    <pre id="log"></pre>
+  </div>
+
+  <div class="right">
+    <h3>实时指标（2 秒窗）</h3>
+    <div class="grid">
+      <div class="cell" id="cState"><b>—</b><span>状态</span></div>
+      <div class="cell" id="cCad"><b>—</b><span>步频 步/分</span></div>
+      <div class="cell" id="cCv"><b>—</b><span>节律变异 CV</span></div>
+      <div class="cell" id="cTilt"><b>—</b><span>杆倾角 °</span></div>
+      <div class="cell" id="cSway"><b>—</b><span>摆动 RMS g</span></div>
+      <div class="cell" id="cPress"><b>—</b><span>掌压 峰/均</span></div>
+    </div>
+
+    <h3 style="margin-top:14px">AI 助手</h3>
+    <div id="ai"><div class="line rule">还没开始说。接上拐杖（或点「回放演示」）我就能看着指标说话。<small>—</small></div></div>
+
+    <details>
+      <summary>设置（key 只存在这台手机的浏览器里，不进网页源码）</summary>
+      <input id="inKey" type="password" placeholder="DeepSeek API key：sk-...">
+      <input id="inProxy" type="text" placeholder="代理地址（可选，填了就走代理；留空直连 DeepSeek）">
+      <input id="inModel" type="text" placeholder="模型" value="deepseek-chat">
+      <button class="ghost" id="btnSave">保存</button>
+      <p class="hint">直连被浏览器拦（Failed to fetch）就填代理地址。没有 key 也能演示：AI 那张卡会自动用内置规则说话。</p>
+    </details>
+  </div>
+</main>
 
 <script>
+/* ============ 1. 蓝牙与画图 ============ */
 const SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 const TX      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
-const cv = document.getElementById("cv");
+const cv  = document.getElementById("cv");
 const ctx = cv.getContext("2d");
-const stat = document.getElementById("stat");
-const flag = document.getElementById("flag");
-const logEl = document.getElementById("log");
+const statEl = document.getElementById("stat");
+statEl.dataset.prefix = "未连接";
+const flagEl = document.getElementById("flag");
+const logEl  = document.getElementById("log");
 
-const N = 250;                 // 画 5 秒（50 Hz）
+const N = 250;                       // 画 5 秒
 const tipBuf = new Array(N).fill(0);
 const hanBuf = new Array(N).fill(0);
 const fsrBuf = new Array(N).fill(0);
-let tipBase = null, hanBase = null;   // 静止基线，用来算“竖直方向变化量”
-let frames = 0, t0 = performance.now(), lastFrame = 0;
-let alertUntil = 0;
-
-// 阈值：竖直加速度偏离基线超过 0.9 g（4096 LSB/g）就认为是突变
-const SPIKE = 0.9 * 4096;
-const WINDOW_MS = 200;
-let spikeAt = 0;
+function push(a, v){ a.push(v); if (a.length > N) a.shift(); }
 
 function resize(){
-  cv.width = cv.clientWidth * devicePixelRatio;
+  cv.width  = cv.clientWidth  * devicePixelRatio;
   cv.height = cv.clientHeight * devicePixelRatio;
   ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
 }
@@ -64,107 +111,327 @@ addEventListener("resize", resize); resize();
 function draw(){
   const w = cv.clientWidth, h = cv.clientHeight;
   ctx.clearRect(0,0,w,h);
-
-  // 中线
-  ctx.strokeStyle = "#222"; ctx.lineWidth = 1;
+  ctx.strokeStyle = "#161c24"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0,h/2); ctx.lineTo(w,h/2); ctx.stroke();
-
-  const scale = h/2/2;          // ±2 g 占满半屏（单位：g）
-  const drawLine = (buf, color, scaleF, off) => {
+  const scale = h/2/2;               // ±2 g
+  const line = (buf, color, sf) => {
     ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
     for (let i=0;i<N;i++){
-      const x = i/(N-1)*w;
-      const y = h - (buf[i]*scaleF*scale + off);
+      const x = i/(N-1)*w, y = h - (buf[i]*sf*scale);
       i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
     }
     ctx.stroke();
   };
-  drawLine(tipBuf, "#3f8", 1, 0);
-  drawLine(hanBuf, "#39f", 1, 0);
-  drawLine(fsrBuf, "#fa3", h*0.35/4095, 0);   // 掌压单独缩放到下方 35% 高度
-
+  line(tipBuf, "#3f8", 1);
+  line(hanBuf, "#39f", 1);
+  line(fsrBuf, "#fa3", h*0.35/4095);
   requestAnimationFrame(draw);
 }
 requestAnimationFrame(draw);
 
-function push(a, v){ a.push(v); if (a.length > N) a.shift(); }
+/* ============ 2. 帧解析 + 滑窗 ============ */
+const WIN = 100;                     // 2 秒 @50Hz
+let win = [];                        // {t, tip:[x,y,z], han:[x,y,z], fsr}
+let frames = 0, t0 = performance.now();
+let alertUntil = 0, spikeAt = 0;
+const SPIKE = 0.9 * 4096, WINDOW_MS = 200;
 
-async function connect(){
-  if (!navigator.bluetooth) {
-    stat.textContent = "这个浏览器不支持蓝牙，换 Chrome 或 Edge";
-    return;
-  }
-  try{
-    const dev = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: "CaneA01" }],
-      optionalServices: [SERVICE]
-    });
-    const server = await dev.gatt.connect();
-    const svc = await server.getPrimaryService(SERVICE);
-    const ch = await svc.getCharacteristic(TX);
-    await ch.startNotifications();
-    ch.addEventListener("characteristicvaluechanged", onFrame);
-    stat.textContent = "已连接：" + (dev.name || "CaneA01");
-    document.getElementById("btn").disabled = true;
-    dev.addEventListener("gattserverdisconnected", () => {
-      stat.textContent = "断开了，重新点连接";
-      document.getElementById("btn").disabled = false;
-    });
-  }catch(e){
-    stat.textContent = "连接失败：" + e.message;
-  }
-}
-document.getElementById("btn").onclick = connect;
+let calRef = null;                   // 校准用的“竖直”方向（单位向量）
+let autoRef = null;                  // 没校准时，用第一段静止数据当参考
+let lastT = 0;
 
-function onFrame(ev){
-  const dv = ev.target.value;
-  if (dv.byteLength < 18) return;
-  if (dv.getUint8(0) !== 0xA5) return;        // 包头不对，丢掉
-  let sum = 0;
-  for (let i=0;i<17;i++) sum = (sum + dv.getUint8(i)) & 0xFF;
-  if (sum !== dv.getUint8(17)) return;        // 校验不过，丢掉
+function onPacket(tip, han, fsr, now){
+  const tm = now / 1000;
+  win.push({t: tm, tip, han, fsr});
+  if (win.length > WIN) win.shift();
 
-  const t   = dv.getUint16(1, true);
-  const tipZ = dv.getInt16(7, true);
-  const hanZ = dv.getInt16(13, true);
-  const fsr  = dv.getUint16(15, true);
-
-  if (tipBase === null) { tipBase = tipZ; hanBase = hanZ; }
-  // 慢速跟踪基线（走路时的直流分量）
-  tipBase += (tipZ - tipBase) * 0.002;
-  hanBase += (hanZ - hanBase) * 0.002;
-
-  const tipDev = tipZ - tipBase, hanDev = hanZ - hanBase;
-
-  // 打滑判定：200 ms 窗口内的突变
-  const now = performance.now();
-  if (Math.abs(tipDev) > SPIKE) {
-    if (!spikeAt || now - spikeAt > WINDOW_MS) { spikeAt = now; }
+  // 打滑/突变判定（用杖尖竖直分量相对基线的跳变）
+  const dev = tip[2] - (win.length ? win[0].tip[2] : tip[2]);
+  if (Math.abs(dev) > SPIKE){
+    if (!spikeAt || now - spikeAt > WINDOW_MS) spikeAt = now;
     alertUntil = now + 800;
   }
-  if (now < alertUntil){
-    flag.textContent = "检测到突变";
-    flag.classList.add("on");
-  } else {
-    flag.textContent = "正常";
-    flag.classList.remove("on");
-  }
+  if (now < alertUntil){ flagEl.textContent = "检测到突变"; flagEl.classList.add("on"); }
+  else { flagEl.textContent = "正常"; flagEl.classList.remove("on"); }
 
-  push(tipBuf, tipDev / 4096);
-  push(hanBuf, hanDev / 4096);
+  push(tipBuf, tip[2] / 4096);
+  push(hanBuf, han[2] / 4096);
   push(fsrBuf, fsr);
 
   frames++;
   if (now - t0 > 1000){
     const fps = frames * 1000 / (now - t0);
-    stat.textContent = `50 Hz 实测 ${fps.toFixed(0)} 帧/秒 · 掌压 ${fsr}`;
+    statEl.textContent = statEl.dataset.prefix + ` · ${fps.toFixed(0)} 帧/秒 · 掌压 ${fsr}`;
     frames = 0; t0 = now;
   }
-  if (now - lastFrame > 500){
-    lastFrame = now;
-    logEl.textContent = `t=${t} ms  杖尖z=${tipZ}  手柄z=${hanZ}  掌压=${fsr}`;
+  if (now - lastT > 800){
+    lastT = now;
+    logEl.textContent = `杖尖 ${tip.join(",")}  手柄 ${han.join(",")}  掌压 ${fsr}`;
   }
 }
+
+/* ============ 3. 指标计算（本地，硬指标） ============ */
+const g = v => v / 4096;
+const norm = a => Math.hypot(a[0], a[1], a[2]);
+
+function metrics(){
+  if (win.length < 40) return null;
+  const secs = (win[win.length-1].t - win[0].t) || 2;
+
+  // 合成加速度（g）
+  const mag = win.map(f => g(norm(f.tip)));
+  const mean = mag.reduce((s,v)=>s+v,0)/mag.length;
+  const dev  = mag.map(v => v - mean);
+  const sd   = Math.sqrt(dev.reduce((s,v)=>s+v*v,0)/dev.length);
+
+  // 步频：局部极大值，间隔 ≥160ms（最多 375 步/分）
+  const thr = Math.max(0.04, sd * 0.45);
+  let peaks = 0, lastPeak = -99;
+  const gaps = [];
+  for (let i=1;i<dev.length-1;i++){
+    if (dev[i] > thr && dev[i] >= dev[i-1] && dev[i] > dev[i+1]){
+      if (win[i].t - lastPeak >= 0.16){
+        if (lastPeak > 0) gaps.push(win[i].t - lastPeak);
+        lastPeak = win[i].t; peaks++;
+      }
+    }
+  }
+  const cadence = peaks / secs * 60;
+  const gm = gaps.length ? gaps.reduce((s,v)=>s+v,0)/gaps.length : 0;
+  const gsd = gaps.length > 1
+    ? Math.sqrt(gaps.reduce((s,v)=>s+(v-gm)*(v-gm),0)/gaps.length) : 0;
+  const cv = gm > 0 ? gsd/gm : 0;
+
+  // 倾角：当前平均加速度方向 vs 参考方向（与安装朝向无关）
+  const ax = win.reduce((s,f)=>s+g(f.tip[0]),0)/win.length;
+  const ay = win.reduce((s,f)=>s+g(f.tip[1]),0)/win.length;
+  const az = win.reduce((s,f)=>s+g(f.tip[2]),0)/win.length;
+  const cur = [ax,ay,az], cn = norm(cur) || 1;
+  if (!calRef){
+    if (!autoRef) autoRef = cur.map(v=>v/cn);
+    else if (sd < 0.05) autoRef = cur.map(v=>v/cn);   // 静止时慢慢刷新
+  }
+  const ref = calRef || autoRef;
+  let tilt = 0;
+  if (ref){
+    const dot = (cur[0]*ref[0] + cur[1]*ref[1] + cur[2]*ref[2]) / cn;
+    tilt = Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
+  }
+
+  // 掌压
+  const pr = win.map(f => f.fsr / 4095);
+  const pressMean = pr.reduce((s,v)=>s+v,0)/pr.length;
+  const pressPeak = Math.max(...pr);
+
+  // 状态
+  let state = "站立";
+  if (sd > 0.06 && cadence > 20) state = "行走";
+  else if (sd > 0.06) state = "晃动";
+  if (performance.now() < alertUntil) state = "突变";
+
+  return {
+    state,
+    cadence: +cadence.toFixed(0),
+    cv: +cv.toFixed(2),
+    tilt: +tilt.toFixed(1),
+    sway: +sd.toFixed(2),
+    press_mean: +pressMean.toFixed(2),
+    press_peak: +pressPeak.toFixed(2)
+  };
+}
+
+function paint(m){
+  if (!m) return;
+  const set = (id, val, cls) => {
+    const el = document.getElementById(id);
+    el.querySelector("b").textContent = val;
+    el.className = "cell" + (cls ? " " + cls : "");
+  };
+  set("cState", m.state, m.state === "突变" ? "bad" : "");
+  set("cCad",   m.cadence, m.cadence && m.cadence < 60 && m.state === "行走" ? "warn" : "");
+  set("cCv",    m.cv,     m.cv > 0.25 ? "warn" : "");
+  set("cTilt",  m.tilt,   m.tilt > 15 ? "bad" : m.tilt > 10 ? "warn" : "");
+  set("cSway",  m.sway,   "");
+  set("cPress", m.press_peak.toFixed(2) + " / " + m.press_mean.toFixed(2), m.press_mean < 0.1 ? "warn" : "");
+}
+
+/* ============ 4. AI 那一层 ============ */
+const KEY_STORE = "cane_ai_key", PROXY_STORE = "cane_ai_proxy", MODEL_STORE = "cane_ai_model";
+const inKey = document.getElementById("inKey");
+const inProxy = document.getElementById("inProxy");
+const inModel = document.getElementById("inModel");
+inKey.value   = localStorage.getItem(KEY_STORE)   || "";
+inProxy.value = localStorage.getItem(PROXY_STORE) || "";
+inModel.value = localStorage.getItem(MODEL_STORE) || "deepseek-chat";
+document.getElementById("btnSave").onclick = () => {
+  localStorage.setItem(KEY_STORE, inKey.value.trim());
+  localStorage.setItem(PROXY_STORE, inProxy.value.trim());
+  localStorage.setItem(MODEL_STORE, inModel.value.trim() || "deepseek-chat");
+  addLine("设置存好了（只在这台手机上）", true);
+};
+
+const SYS = "你是智能防滑拐杖的实时助手。你会收到一串实时步态指标，用一句不超过30个字的中文说人话，"
+  + "像在旁边看着的人那样提醒。不要用列表，不要解释术语，不要重复上一句。"
+  + "步频低于60、节律变异CV大于0.25、杆倾角大于15度、掌压均值低于0.1（没在撑）、出现突变，"
+  + "这几种要直接说问题；都正常就简短说一句稳住。";
+
+let lastSaid = "";
+let lastSent = 0, lastSig = "", timer = 0;
+
+let lastLineText = "";
+function addLine(text, isRule){
+  if (text === lastLineText) return;        // 同一句不连着刷
+  lastLineText = text;
+  const box = document.getElementById("ai");
+  const d = document.createElement("div");
+  d.className = "line" + (isRule ? " rule" : "");
+  const now = new Date();
+  d.innerHTML = text.replace(/</g,"&lt;")
+    + `<small>${now.getHours()}:${String(now.getMinutes()).padStart(2,"0")}:${String(now.getSeconds()).padStart(2,"0")}`
+    + (isRule ? " · 本地规则" : " · AI") + `</small>`;
+  box.prepend(d);
+  while (box.children.length > 30) box.lastChild.remove();
+}
+
+function ruleText(m){
+  if (m.state === "突变") return "这一下有突然的抖动，握紧一点，别滑。";
+  if (m.state === "行走" && m.cadence < 60) return "步子有点慢，节奏散，别急着往前赶。";
+  if (m.cv > 0.25 && m.state === "行走") return "步子一长一短，节奏不太稳，放慢一点。";
+  if (m.tilt > 15) return "杆子歪得有点多，扶正一点省力。";
+  if (m.press_mean < 0.1) return "掌压几乎为零，手没用力撑在拐杖上。";
+  if (m.state === "站立") return "站得挺稳，可以歇。";
+  return "走得还行，节奏稳。";
+}
+
+async function askAI(m){
+  const key = (localStorage.getItem(KEY_STORE) || "").trim();
+  const proxy = (localStorage.getItem(PROXY_STORE) || "").trim();
+  const model = (localStorage.getItem(MODEL_STORE) || "deepseek-chat").trim();
+
+  // 没填 key 又没代理：不白跑一趟网络，直接用本地规则说 —— 答辩没网也不哑
+  if (!key && !proxy){ addLine(ruleText(m), true); return; }
+  const payload = {
+    model,
+    messages: [
+      { role: "system", content: SYS },
+      { role: "user", content: JSON.stringify(m) + "\n上一句你说过：" + (lastSaid || "（还没说）") }
+    ],
+    temperature: 0.6,
+    max_tokens: 120,
+    stream: false
+  };
+  const url = proxy || "https://api.deepseek.com/chat/completions";
+  const headers = { "Content-Type": "application/json" };
+  if (key) headers["Authorization"] = "Bearer " + key;
+
+  const ctl = new AbortController();
+  const to = setTimeout(() => ctl.abort(), 8000);
+  try{
+    const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload), signal: ctl.signal });
+    clearTimeout(to);
+    const txt = await r.text();
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = JSON.parse(txt);
+    const s = (j.choices && j.choices[0] && j.choices[0].message.content || "").trim();
+    if (!s) throw new Error("空回复");
+    lastSaid = s;
+    addLine(s, false);
+  }catch(e){
+    clearTimeout(to);
+    addLine(ruleText(m) + "（AI 没应声：" + (e.name === "AbortError" ? "超时" : (e.message || "网络/CORS")) + "）", true);
+  }
+}
+
+function tick(){
+  const m = metrics();
+  paint(m);
+  const now = performance.now();
+  if (m && now - lastSent > 2500){
+    const sig = [m.state, Math.round(m.cadence/10), m.tilt > 15, m.cv > 0.25,
+                 m.press_mean < 0.1, Math.round(m.sway*10)].join("|");
+    if (sig !== lastSig){
+      lastSig = sig;
+      lastSent = now;
+      askAI(m);
+    }
+  }
+}
+setInterval(tick, 500);
+
+/* ============ 5. 连接 / 回放 / 校准 ============ */
+document.getElementById("btnCal").onclick = () => {
+  const m = metrics();
+  if (!m){ addLine("先动一下（接到数据）才能校准。", true); return; }
+  const ax = win.reduce((s,f)=>s+g(f.tip[0]),0)/win.length;
+  const ay = win.reduce((s,f)=>s+g(f.tip[1]),0)/win.length;
+  const az = win.reduce((s,f)=>s+g(f.tip[2]),0)/win.length;
+  const n = norm([ax,ay,az]) || 1;
+  calRef = [ax/n, ay/n, az/n];
+  addLine("校准好了，现在这个姿势算竖直，倾角从 0 开始。", true);
+};
+
+const btn = document.getElementById("btn");
+function onFrame(ev){
+  const dv = ev.target.value;
+  if (dv.byteLength < 18 || dv.getUint8(0) !== 0xA5) return;
+  let sum = 0;
+  for (let i=0;i<17;i++) sum = (sum + dv.getUint8(i)) & 0xFF;
+  if (sum !== dv.getUint8(17)) return;
+  onPacket(
+    [dv.getInt16(3,true), dv.getInt16(5,true), dv.getInt16(7,true)],
+    [dv.getInt16(9,true), dv.getInt16(11,true), dv.getInt16(13,true)],
+    dv.getUint16(15,true),
+    performance.now()
+  );
+}
+
+async function connect(){
+  if (!navigator.bluetooth){ statEl.textContent = "这个浏览器不给蓝牙，换 Chrome 或 Edge（iPhone 用 Bluefy）"; return; }
+  try{
+    const dev = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "CaneA01" }], optionalServices: [SERVICE]
+    });
+    const server = await dev.gatt.connect();
+    const svc = await server.getPrimaryService(SERVICE);
+    const ch  = await svc.getCharacteristic(TX);
+    await ch.startNotifications();
+    ch.addEventListener("characteristicvaluechanged", onFrame);
+    statEl.dataset.prefix = "已连接：" + (dev.name || "CaneA01");
+    statEl.textContent = statEl.dataset.prefix;
+    btn.disabled = true;
+    dev.addEventListener("gattserverdisconnected", () => {
+      statEl.textContent = "断开了，重新点连接";
+      btn.disabled = false;
+    });
+  }catch(e){
+    statEl.textContent = "连接失败：" + e.message;
+  }
+}
+btn.onclick = connect;
+
+/* 回放：没有硬件也能把界面跑起来（答辩兜底） */
+let replayTimer = null;
+document.getElementById("btnReplay").onclick = function(){
+  if (replayTimer){ clearInterval(replayTimer); replayTimer = null; this.textContent = "回放演示"; statEl.textContent = "已停"; return; }
+  this.textContent = "停回放";
+  statEl.dataset.prefix = "回放模式（假数据）";
+  statEl.textContent = statEl.dataset.prefix;
+  let k = 0;
+  replayTimer = setInterval(() => {
+    k++;
+    const t = k / 50;
+    // 步行节律 1.6 步/秒 ≈ 96 步/分；杖尖竖直方向正弦 ±0.35 g，另有轻微噪声
+    const ph = 2 * Math.PI * 1.6 * t;
+    const walk = (k % 750) < 600 ? 1 : 0;            // 12 秒走 3 秒停
+    const tipZ = 4096 * (1 + walk * 0.35 * Math.sin(ph) + (Math.random()-0.5) * 0.03);
+    const tipX = 4096 * 0.12 * walk * Math.sin(ph * 0.5);
+    const tipY = 4096 * 0.05;
+    const fsr  = 1200 + walk * 500 * Math.abs(Math.sin(ph)) + Math.random()*60;
+    onPacket([tipX, tipY, tipZ].map(v=>Math.round(v)),
+             [tipX*0.8, tipY, tipZ*0.98].map(v=>Math.round(v)),
+             Math.round(fsr), performance.now());
+  }, 20);
+};
 </script>
 </body>
 </html>
