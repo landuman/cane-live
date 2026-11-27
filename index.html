@@ -106,6 +106,14 @@ details input{width:100%;margin:6px 0;padding:7px 9px;border-radius:7px;border:1
       <input id="inKey" type="password" placeholder="DeepSeek API key：sk-...">
       <input id="inProxy" type="text" placeholder="代理地址（可选，填了就走代理；留空直连 DeepSeek）">
       <input id="inModel" type="text" placeholder="模型" value="deepseek-chat">
+      <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:8px">多久说一句
+        <select id="inGap" style="flex:1;padding:7px;border-radius:8px;background:#0f1a22;color:#e6eef7;border:1px solid #24333f">
+          <option value="6000">6 秒（演示用，快）</option>
+          <option value="12000">12 秒（默认）</option>
+          <option value="20000">20 秒（慢）</option>
+          <option value="-1">不说话，只看指标</option>
+        </select>
+      </label>
       <button class="ghost" id="btnSave">保存</button>
       <p class="hint">直连被浏览器拦（Failed to fetch）就填代理地址。没有 key 也能演示：AI 那张卡会自动用内置规则说话。</p>
     </details>
@@ -506,6 +514,21 @@ const SYS = "你是智能防滑拐杖的助手，对面是上了年纪的老人�
 let lastSaid = "";
 let lastSent = 0, lastSig = "", timer = 0;
 
+// 说话节奏：老人认字慢，一句得留够读完的时间，不能两秒刷一条
+const GAP_STORE = "cane_ai_gap";
+let aiGap = Number(localStorage.getItem(GAP_STORE) || 12000);
+if (!isFinite(aiGap)) aiGap = 12000;
+let lastSaidAt = 0, lastSaidChars = 0;
+const readMs = () => lastSaidChars * 200 + 3000;   // 按一秒看五个字算，再多留三秒
+const inGap = document.getElementById("inGap");
+if (inGap){
+  inGap.value = String(aiGap);
+  inGap.onchange = () => {
+    aiGap = Number(inGap.value);
+    try{ localStorage.setItem(GAP_STORE, String(aiGap)); }catch(e){}
+  };
+}
+
 let lastLineText = "";
 function addLine(text, isRule, cls){
   if (text === lastLineText) return;        // 同一句不连着刷
@@ -519,6 +542,8 @@ function addLine(text, isRule, cls){
     + (isRule ? " · 本地规则" : " · AI") + `</small>`;
   box.prepend(d);
   while (box.children.length > 30) box.lastChild.remove();
+  lastSaidAt = performance.now();
+  lastSaidChars = text.length;
 }
 
 function ruleText(m){
@@ -577,7 +602,8 @@ function tick(){
   paint(m);
   const now = performance.now();
   if (fallActive) return;      // 跌倒那句在报警里已经说过了，别再刷一遍
-  if (m && now - lastSent > 2500){
+  if (aiGap < 0) return;       // 设成「不说话，只显示」
+  if (m && now - lastSent > aiGap && now - lastSaidAt > readMs()){
     const sig = [m.state, Math.round(m.cadence/10), m.tilt > 15, m.cv > 0.25,
                  m.press_mean < 0.1, Math.round(m.sway*10)].join("|");
     if (sig !== lastSig){
@@ -652,8 +678,8 @@ document.getElementById("btnReplay").onclick = function(){
     k++;
     const c = k % 2200;                    // 44 秒一轮，末尾躺着 10 秒，看得清
     const t = k / 50;
-    // 步行节律 1.6 步/秒 ≈ 96 步/分；杖尖竖直方向正弦 ±0.35 g，另有轻微噪声
-    const ph = 2 * Math.PI * 1.6 * t;
+    // 步行节律 1.2 步/秒 ≈ 72 步/分（拄拐的老人大概就这速度，别演成年轻人快步）
+    const ph = 2 * Math.PI * 1.2 * t;
     const walk = ((k % 750) < 600 && (c < 1650)) ? 1 : 0;   // 12 秒走 3 秒停
     let tipZ = 4096 * (1 + walk * 0.35 * Math.sin(ph) + (Math.random()-0.5) * 0.03);
     let tipX = 4096 * 0.12 * walk * Math.sin(ph * 0.5);
