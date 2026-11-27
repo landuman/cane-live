@@ -36,6 +36,15 @@ details{margin-top:10px;background:#131820;border:1px solid #1f2732;border-radiu
 summary{cursor:pointer;color:#8ea4b8;font-size:13px}
 details input{width:100%;margin:6px 0;padding:7px 9px;border-radius:7px;border:1px solid #2a323d;background:#0c1015;color:#dbe6f1;font-size:13px}
 .hint{font-size:12px;color:#6d7f92;line-height:1.5}
+/* 跌倒报警条：平时不占地方，确认跌倒才整条弹出来 */
+#fallBanner{display:none;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px;background:#c81f1f;color:#fff;
+  font-weight:700;font-size:17px;box-shadow:0 4px 18px rgba(200,0,0,.45);animation:fallPulse 1s infinite}
+#fallBanner.show{display:flex}
+@keyframes fallPulse{0%,100%{background:#c81f1f}50%{background:#f03333}}
+#fallBanner small{font-weight:400;font-size:13px;opacity:.9}
+#fallBanner button{margin-left:auto;background:#fff;color:#911;font-weight:700}
+.line.fall{border-left-color:#ff5252;background:#2a1416;color:#ffd9d9;font-weight:600}
+#cFall b{color:#ff7a7a}
 </style>
 </head>
 <body>
@@ -46,6 +55,12 @@ details input{width:100%;margin:6px 0;padding:7px 9px;border-radius:7px;border:1
   <span class="stat" id="stat">未连接</span>
   <span id="flag">等待数据</span>
 </header>
+
+<div id="fallBanner">
+  <span>⚠ 检测到跌倒</span>
+  <small id="fallTime"></small>
+  <button id="btnFallCancel" class="ghost">人没事，解除报警</button>
+</div>
 
 <main>
   <div class="left">
@@ -67,6 +82,7 @@ details input{width:100%;margin:6px 0;padding:7px 9px;border-radius:7px;border:1
       <div class="cell" id="cTilt"><b>—</b><span>杆倾角 °</span></div>
       <div class="cell" id="cSway"><b>—</b><span>摆动 RMS g</span></div>
       <div class="cell" id="cPress"><b>—</b><span>掌压 峰/均</span></div>
+      <div class="cell" id="cFall"><b>—</b><span>跌倒</span></div>
     </div>
 
     <h3 style="margin-top:14px">AI 助手</h3>
@@ -155,7 +171,8 @@ let alertUntil = 0, spikeAt = 0;
 const SPIKE = 0.9 * 4096, WINDOW_MS = 200;
 
 let calRef = null;                   // 校准用的“竖直”方向（单位向量）
-let autoRef = null;                  // 没校准时，用第一段静止数据当参考
+let autoRef = null;                  // 没校准时，用开机头几秒的静止数据当参考
+let refLearnUntil = performance.now() + 8000;
 let lastT = 0;
 
 function onPacket(tip, han, fsr, now){
@@ -169,8 +186,13 @@ function onPacket(tip, han, fsr, now){
     if (!spikeAt || now - spikeAt > WINDOW_MS) spikeAt = now;
     alertUntil = now + 800;
   }
-  if (now < alertUntil){ flagEl.textContent = "检测到突变"; flagEl.classList.add("on"); }
+  if (fallActive){ flagEl.textContent = "跌倒报警"; flagEl.classList.add("on"); }
+  else if (now < alertUntil){ flagEl.textContent = "检测到突变"; flagEl.classList.add("on"); }
+  else if (lyingWarned){ flagEl.textContent = "拐杖倒地"; flagEl.classList.add("on"); }
   else { flagEl.textContent = "正常"; flagEl.classList.remove("on"); }
+
+  // 跌倒判定：每一帧都过一遍状态机（失重 → 砸地 → 躺平不动）
+  fallCheck(tip, now);
 
   push(tipBuf, tip[2] / 4096);
   push(hanBuf, han[2] / 4096);
@@ -226,8 +248,9 @@ function metrics(){
   const az = win.reduce((s,f)=>s+g(f.tip[2]),0)/win.length;
   const cur = [ax,ay,az], cn = norm(cur) || 1;
   if (!calRef){
+    // 只开机头 8 秒自己找一次「竖直」，之后冻住：否则站着不动时会把躺平一点点学成竖直
     if (!autoRef) autoRef = cur.map(v=>v/cn);
-    else if (sd < 0.05) autoRef = cur.map(v=>v/cn);   // 静止时慢慢刷新
+    else if (sd < 0.05 && performance.now() < refLearnUntil) autoRef = cur.map(v=>v/cn);
   }
   const ref = calRef || autoRef;
   let tilt = 0;
@@ -246,6 +269,7 @@ function metrics(){
   if (sd > 0.06 && cadence > 20) state = "行走";
   else if (sd > 0.06) state = "晃动";
   if (performance.now() < alertUntil) state = "突变";
+  if (fallActive) state = "跌倒";
 
   return {
     state,
@@ -256,6 +280,102 @@ function metrics(){
     press_mean: +pressMean.toFixed(2),
     press_peak: +pressPeak.toFixed(2)
   };
+}
+
+/* ============ 3.5 跌倒报警 ============ */
+// 不加新硬件：两块 MPU6050 的合加速度 + 杆身倾角就够判「失重→砸地→躺平不动」三步。
+// 三步都凑齐才算跌倒，坐一下、拐杖靠墙放倒都不会误报。
+const FALL_CFG = {
+  freeG: 0.55, freeFrames: 4,        // 失重：连续 4 帧（≈80 ms）合加速度 < 0.55 g
+  impactG: 2.2, impactWinMs: 800,    // 失重后 0.8 s 内砸出 2.2 g 以上
+  stillMs: 1200, stillSd: 0.20,      // 砸地后 1.2 s 基本不动（最后 0.6 s 标准差 < 0.2 g）
+  lyingTilt: 45,                     // 而且杆子躺平了：相对"竖直"转了 45° 以上
+  bannerHoldMs: 60000                // 没人解除，一分钟后自动收起
+};
+let fallStage = 0, freeAt = 0, impactAt = 0, impactPeak = 0, freeCnt = 0;
+let magHist = [], fallCount = 0, lastFallAt = 0, fallActive = false;
+let lyingSince = 0, lyingWarned = false;
+let audioCtx = null;
+
+const hhmmss = d => `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;
+
+function tiltOf(a){
+  const ref = calRef || autoRef;
+  const n = norm(a) || 1;
+  if (!ref) return null;
+  const dot = (a[0]*ref[0] + a[1]*ref[1] + a[2]*ref[2]) / n;
+  return Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
+}
+
+function fallSound(){
+  try{
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const t0 = audioCtx.currentTime;
+    [0, 0.35, 0.7, 1.2].forEach((off, i) => {
+      const o = audioCtx.createOscillator(), ga = audioCtx.createGain();
+      o.type = "square";
+      o.frequency.value = i < 3 ? 880 : 640;
+      ga.gain.setValueAtTime(0.0001, t0 + off);
+      ga.gain.exponentialRampToValueAtTime(0.22, t0 + off + 0.02);
+      ga.gain.exponentialRampToValueAtTime(0.0001, t0 + off + 0.22);
+      o.connect(ga); ga.connect(audioCtx.destination);
+      o.start(t0 + off); o.stop(t0 + off + 0.24);
+    });
+  }catch(e){ /* 静音就别响，检测照样在 */ }
+}
+
+function triggerFall(now){
+  fallActive = true; lastFallAt = now; fallCount++;
+  document.getElementById("fallBanner").classList.add("show");
+  document.getElementById("fallTime").textContent = hhmmss(new Date()) + " · 已经响了铃";
+  fallSound();
+  if (navigator.vibrate) navigator.vibrate([400,150,400,150,900]);
+  addLine("摔倒了！您先别急着爬起来，感觉一下哪儿疼；能动就慢慢侧过身，扶着东西再起来。", true, "fall");
+  const m = metrics() || { state: "跌倒" };
+  m.state = "跌倒"; m.fall = true;
+  askAI(m, true);            // 上面那句已经说了，AI 只负责补一句更贴人的话，没 key 就别重复
+}
+
+function clearFall(){
+  fallActive = false;
+  document.getElementById("fallBanner").classList.remove("show");
+}
+document.getElementById("btnFallCancel").onclick = () => {
+  clearFall();
+  addLine("好，报警解除了，您慢慢来。", true);
+};
+
+function fallCheck(tip, now){
+  const mag = g(norm(tip));
+  magHist.push({ t: now, v: mag });
+  while (magHist.length && now - magHist[0].t > 2000) magHist.shift();
+  const tilt = tiltOf(tip);
+
+  if (fallStage === 0){
+    freeCnt = mag < FALL_CFG.freeG ? freeCnt + 1 : 0;
+    if (freeCnt >= FALL_CFG.freeFrames){ fallStage = 1; freeAt = now; impactPeak = 0; }
+    // 杆子横躺但没摔（靠墙放倒、支架倒了）；已经在报跌倒就别再重复一句
+    if (!fallActive && tilt !== null && tilt > 60 && mag > 0.6){
+      if (!lyingSince) lyingSince = now;
+      else if (!lyingWarned && now - lyingSince > 2500){
+        lyingWarned = true;
+        addLine("拐杖好像横躺着了，您扶起来再走。", true);
+      }
+    } else { lyingSince = 0; lyingWarned = false; }
+  } else if (fallStage === 1){
+    if (mag > FALL_CFG.impactG){ fallStage = 2; impactAt = now; impactPeak = mag; }
+    else if (now - freeAt > FALL_CFG.impactWinMs){ fallStage = 0; freeCnt = 0; }
+  } else if (fallStage === 2){
+    if (now - impactAt > FALL_CFG.stillMs){
+      const seg = magHist.filter(p => p.t >= now - 600);
+      const mean = seg.reduce((s,p)=>s+p.v,0) / Math.max(1, seg.length);
+      const sd = Math.sqrt(seg.reduce((s,p)=>s+(p.v-mean)*(p.v-mean),0) / Math.max(1, seg.length));
+      const lying = tilt === null ? true : tilt > FALL_CFG.lyingTilt;
+      if (sd < FALL_CFG.stillSd && lying) triggerFall(now);
+      fallStage = 0; freeCnt = 0;
+    }
+  }
+  if (fallActive && now - lastFallAt > FALL_CFG.bannerHoldMs) clearFall();
 }
 
 function paint(m){
@@ -271,10 +391,13 @@ function paint(m){
   set("cTilt",  m.tilt,   m.tilt > 15 ? "bad" : m.tilt > 10 ? "warn" : "");
   set("cSway",  m.sway,   "");
   set("cPress", m.press_peak.toFixed(2) + " / " + m.press_mean.toFixed(2), m.press_mean < 0.1 ? "warn" : "");
+  set("cFall",  fallCount ? fallCount + " 次" : "0 次", fallActive ? "bad" : "");
 }
 
 /* ============ 4. AI 那一层 ============ */
 const KEY_STORE = "cane_ai_key", PROXY_STORE = "cane_ai_proxy", MODEL_STORE = "cane_ai_model";
+// 代理地址：部署好 Cloudflare Worker 之后把它填在这里，任何人打开都不用再输 key
+const DEFAULT_PROXY = "";
 const inKey = document.getElementById("inKey");
 const inProxy = document.getElementById("inProxy");
 const inModel = document.getElementById("inModel");
@@ -291,6 +414,8 @@ document.getElementById("btnSave").onclick = () => {
 const SYS = "你是智能防滑拐杖的助手，对面是上了年纪的老人。说话要用「您」，口气温和、慢、不着急，"
   + "像家里人提醒那样，一句不超过25个字。不说数字，不说术语，不用英文和缩写，不说「数据」「指标」。"
   + "不要列表，不要重复上一句。"
+  + "如果看到「跌倒」或者摔了，头一句就得让他别急着爬起来，先问哪儿疼、手脚能不能动，"
+  + "再让他慢慢侧过身找东西扶，一句一件事，别一口气说三句。"
   + "走得慢、节奏不稳、杆子歪了、手没撑住、突然一晃，这几种要温和地提醒一句怎么办；"
   + "都稳当就夸一句、让他放心。";
 
@@ -298,12 +423,12 @@ let lastSaid = "";
 let lastSent = 0, lastSig = "", timer = 0;
 
 let lastLineText = "";
-function addLine(text, isRule){
+function addLine(text, isRule, cls){
   if (text === lastLineText) return;        // 同一句不连着刷
   lastLineText = text;
   const box = document.getElementById("ai");
   const d = document.createElement("div");
-  d.className = "line" + (isRule ? " rule" : "");
+  d.className = "line" + (isRule ? " rule" : "") + (cls ? " " + cls : "");
   const now = new Date();
   d.innerHTML = text.replace(/</g,"&lt;")
     + `<small>${now.getHours()}:${String(now.getMinutes()).padStart(2,"0")}:${String(now.getSeconds()).padStart(2,"0")}`
@@ -313,6 +438,7 @@ function addLine(text, isRule){
 }
 
 function ruleText(m){
+  if (m.fall || m.state === "跌倒") return "摔倒了！您先别急着起来，慢慢感觉一下哪儿疼。";
   if (m.state === "突变") return "您慢点儿，刚晃了一下，握稳了再走。";
   if (m.state === "行走" && m.cadence < 60) return "您别急，一步一步来，走得慢点儿更稳当。";
   if (m.cv > 0.25 && m.state === "行走") return "步子有点乱，您停一停，站稳了再往前走。";
@@ -322,13 +448,13 @@ function ruleText(m){
   return "走得挺稳当，您慢慢来，放心走。";
 }
 
-async function askAI(m){
+async function askAI(m, quietRule){
   const key = (localStorage.getItem(KEY_STORE) || "").trim();
-  const proxy = (localStorage.getItem(PROXY_STORE) || "").trim();
+  const proxy = (localStorage.getItem(PROXY_STORE) || "").trim() || DEFAULT_PROXY;
   const model = (localStorage.getItem(MODEL_STORE) || "deepseek-chat").trim();
 
   // 没填 key 又没代理：不白跑一趟网络，直接用本地规则说 —— 答辩没网也不哑
-  if (!key && !proxy){ addLine(ruleText(m), true); return; }
+  if (!key && !proxy){ if (!quietRule) addLine(ruleText(m), true); return; }
   const payload = {
     model,
     messages: [
@@ -357,6 +483,7 @@ async function askAI(m){
     addLine(s, false);
   }catch(e){
     clearTimeout(to);
+    if (quietRule) return;
     addLine(ruleText(m) + "（AI 没应声：" + (e.name === "AbortError" ? "超时" : (e.message || "网络/CORS")) + "）", true);
   }
 }
@@ -365,6 +492,7 @@ function tick(){
   const m = metrics();
   paint(m);
   const now = performance.now();
+  if (fallActive) return;      // 跌倒那句在报警里已经说过了，别再刷一遍
   if (m && now - lastSent > 2500){
     const sig = [m.state, Math.round(m.cadence/10), m.tilt > 15, m.cv > 0.25,
                  m.press_mean < 0.1, Math.round(m.sway*10)].join("|");
@@ -438,14 +566,28 @@ document.getElementById("btnReplay").onclick = function(){
   let k = 0;
   replayTimer = setInterval(() => {
     k++;
+    const c = k % 2200;                    // 44 秒一轮，末尾躺着 10 秒，看得清
     const t = k / 50;
     // 步行节律 1.6 步/秒 ≈ 96 步/分；杖尖竖直方向正弦 ±0.35 g，另有轻微噪声
     const ph = 2 * Math.PI * 1.6 * t;
-    const walk = (k % 750) < 600 ? 1 : 0;            // 12 秒走 3 秒停
-    const tipZ = 4096 * (1 + walk * 0.35 * Math.sin(ph) + (Math.random()-0.5) * 0.03);
-    const tipX = 4096 * 0.12 * walk * Math.sin(ph * 0.5);
-    const tipY = 4096 * 0.05;
-    const fsr  = 1200 + walk * 500 * Math.abs(Math.sin(ph)) + Math.random()*60;
+    const walk = ((k % 750) < 600 && (c < 1650)) ? 1 : 0;   // 12 秒走 3 秒停
+    let tipZ = 4096 * (1 + walk * 0.35 * Math.sin(ph) + (Math.random()-0.5) * 0.03);
+    let tipX = 4096 * 0.12 * walk * Math.sin(ph * 0.5);
+    let tipY = 4096 * 0.05;
+    let fsr  = 1200 + walk * 500 * Math.abs(Math.sin(ph)) + Math.random()*60;
+
+    // 每轮末尾演一次跌倒：失重 4 帧 → 砸地 8 帧 → 躺平不动（答辩演示用）
+    if (c >= 1700 && c < 1704){
+      tipX = 4096*0.05; tipY = 4096*0.05; tipZ = 4096*0.18; fsr = 300;
+    } else if (c >= 1704 && c < 1712){
+      tipX = 4096*0.30; tipY = -4096*1.20; tipZ = 4096*3.20; fsr = 120;
+    } else if (c >= 1712){
+      tipX = 4096*(0.95 + (Math.random()-0.5)*0.01);
+      tipY = 4096*0.05;
+      tipZ = 4096*(0.15 + (Math.random()-0.5)*0.01);
+      fsr  = 260 + Math.random()*40;
+    }
+
     onPacket([tipX, tipY, tipZ].map(v=>Math.round(v)),
              [tipX*0.8, tipY, tipZ*0.98].map(v=>Math.round(v)),
              Math.round(fsr), performance.now());
