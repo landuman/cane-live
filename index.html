@@ -108,12 +108,20 @@ function resize(){
 }
 addEventListener("resize", resize); resize();
 
+let gain = 1;                        // 自适应纵向放大，让波形铺满屏
 function draw(){
   const w = cv.clientWidth, h = cv.clientHeight;
   ctx.clearRect(0,0,w,h);
   ctx.strokeStyle = "#161c24"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0,h/2); ctx.lineTo(w,h/2); ctx.stroke();
-  const scale = h/2/2;               // ±2 g
+
+  // 看这一窗里加速度峰到多大，自动把纵轴放大（峰占八成高），太小也留个底线免得噪声糊满屏
+  let pk = 0;
+  for (let i=0;i<N;i++) pk = Math.max(pk, Math.abs(tipBuf[i]), Math.abs(hanBuf[i]));
+  pk = Math.max(pk, 0.06);
+  const want = Math.min(12, Math.max(1, 1.6 / pk));
+  gain += (want - gain) * 0.06;      // 慢慢变，别一抖一跳
+  const scale = (h/2/2) * gain;
   const line = (buf, color, sf) => {
     ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
     for (let i=0;i<N;i++){
@@ -270,10 +278,11 @@ document.getElementById("btnSave").onclick = () => {
   addLine("设置存好了（只在这台手机上）", true);
 };
 
-const SYS = "你是智能防滑拐杖的实时助手。你会收到一串实时步态指标，用一句不超过30个字的中文说人话，"
-  + "像在旁边看着的人那样提醒。不要用列表，不要解释术语，不要重复上一句。"
-  + "步频低于60、节律变异CV大于0.25、杆倾角大于15度、掌压均值低于0.1（没在撑）、出现突变，"
-  + "这几种要直接说问题；都正常就简短说一句稳住。";
+const SYS = "你是智能防滑拐杖的助手，对面是上了年纪的老人。说话要用「您」，口气温和、慢、不着急，"
+  + "像家里人提醒那样，一句不超过25个字。不说数字，不说术语，不用英文和缩写，不说「数据」「指标」。"
+  + "不要列表，不要重复上一句。"
+  + "走得慢、节奏不稳、杆子歪了、手没撑住、突然一晃，这几种要温和地提醒一句怎么办；"
+  + "都稳当就夸一句、让他放心。";
 
 let lastSaid = "";
 let lastSent = 0, lastSig = "", timer = 0;
@@ -294,13 +303,13 @@ function addLine(text, isRule){
 }
 
 function ruleText(m){
-  if (m.state === "突变") return "这一下有突然的抖动，握紧一点，别滑。";
-  if (m.state === "行走" && m.cadence < 60) return "步子有点慢，节奏散，别急着往前赶。";
-  if (m.cv > 0.25 && m.state === "行走") return "步子一长一短，节奏不太稳，放慢一点。";
-  if (m.tilt > 15) return "杆子歪得有点多，扶正一点省力。";
-  if (m.press_mean < 0.1) return "掌压几乎为零，手没用力撑在拐杖上。";
-  if (m.state === "站立") return "站得挺稳，可以歇。";
-  return "走得还行，节奏稳。";
+  if (m.state === "突变") return "您慢点儿，刚晃了一下，握稳了再走。";
+  if (m.state === "行走" && m.cadence < 60) return "您别急，一步一步来，走得慢点儿更稳当。";
+  if (m.cv > 0.25 && m.state === "行走") return "步子有点乱，您停一停，站稳了再往前走。";
+  if (m.tilt > 15) return "拐杖歪了，您扶正一些，扶着省力。";
+  if (m.press_mean < 0.1) return "手要使上劲儿，撑住了拐杖才不滑。";
+  if (m.state === "站立") return "您站稳了，慢慢歇一歇，不着急。";
+  return "走得挺稳当，您慢慢来，放心走。";
 }
 
 async function askAI(m){
