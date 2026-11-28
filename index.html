@@ -54,13 +54,27 @@ details input{width:100%;margin:6px 0;padding:7px 9px;border-radius:7px;border:1
 #fallHist .hl .tag{margin-left:auto;font-size:11px;border:1px solid #2b4a60;border-radius:6px;padding:1px 6px;color:#7fd1ff;white-space:nowrap}
 #fallHist .hl.real .tag{color:#ff9a9a;border-color:#5a2a2e}
 #fallHistSum{font-weight:400;font-size:12px;color:#8fa3b8;margin-left:6px}
+/* 连接拐杖：点一下在按钮下面弹出设备列表，选中才算连上 */
+.devwrap{position:relative}
+.devmenu{display:none;position:absolute;top:calc(100% + 6px);left:0;min-width:200px;z-index:60;
+  background:#161b23;border:1px solid #2a323d;border-radius:10px;padding:6px;
+  box-shadow:0 10px 26px rgba(0,0,0,.55)}
+.devmenu.open{display:block}
+.devmenu button{display:block;width:100%;text-align:left;font-size:15px;padding:9px 12px;border-radius:7px;
+  background:transparent;color:#dbe6f1;font-weight:600}
+.devmenu button:hover{background:#202833;color:#7fe3b0}
+.devmenu button:disabled{color:#5f7285}
 </style>
 </head>
 <body>
 <header>
-  <button id="btn">连接拐杖</button>
+  <div class="devwrap">
+    <button id="btn">连接拐杖</button>
+    <div id="devMenu" class="devmenu">
+      <button id="devCane" data-name="智能拐杖">智能拐杖</button>
+    </div>
+  </div>
   <button id="btnReplay" class="ghost">回放演示</button>
-  <button id="btnPhone" class="ghost">手机测试</button>
   <button id="btnCal" class="ghost">校准竖直</button>
   <span class="stat" id="stat">未连接</span>
   <span id="flag">等待数据</span>
@@ -629,6 +643,37 @@ document.getElementById("btnCal").onclick = () => {
 };
 
 const btn = document.getElementById("btn");
+const devMenu = document.getElementById("devMenu");
+const devCane = document.getElementById("devCane");
+let connected = false, bleDev = null;
+
+function paintConnected(name){
+  connected = true;
+  statEl.dataset.prefix = "已连接：" + (name || "智能拐杖");
+  statEl.textContent = statEl.dataset.prefix;
+  btn.textContent = "断开连接";
+  devCane.disabled = true;
+}
+function paintDisconnected(msg){
+  connected = false;
+  statEl.dataset.prefix = "";
+  statEl.textContent = msg || "未连接";
+  btn.textContent = "连接拐杖";
+  devCane.disabled = false;
+}
+function disconnect(){
+  stopPhone();
+  try{ const d = bleDev; bleDev = null; if (d && d.gatt && d.gatt.connected) d.gatt.disconnect(); }catch(err){}
+  paintDisconnected("未连接");
+}
+btn.onclick = function(e){
+  e.stopPropagation();
+  if (connected){ disconnect(); return; }
+  devMenu.classList.toggle("open");
+};
+document.addEventListener("click", (e) => { if (!e.target.closest(".devwrap")) devMenu.classList.remove("open"); });
+devCane.onclick = function(){ devMenu.classList.remove("open"); connect(); };
+
 function onFrame(ev){
   const dv = ev.target.value;
   if (dv.byteLength < 18 || dv.getUint8(0) !== 0xA5) return;
@@ -644,7 +689,9 @@ function onFrame(ev){
 }
 
 async function connect(){
-  if (!navigator.bluetooth){ statEl.textContent = "这个浏览器不给蓝牙，换 Chrome 或 Edge（iPhone 用 Bluefy）"; return; }
+  // 手机有运动传感器：选「智能拐杖」就直接拿本机传感器喂曲线（答辩演示走这条）
+  if (await startPhone()){ paintConnected("智能拐杖"); return; }
+  if (!navigator.bluetooth){ statEl.textContent = "这台设备没有运动传感器，也不给蓝牙，换 Chrome 或 Edge（iPhone 用 Bluefy）"; return; }
   try{
     const dev = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: "CaneA01" }], optionalServices: [SERVICE]
@@ -654,18 +701,16 @@ async function connect(){
     const ch  = await svc.getCharacteristic(TX);
     await ch.startNotifications();
     ch.addEventListener("characteristicvaluechanged", onFrame);
-    statEl.dataset.prefix = "已连接：" + (dev.name || "CaneA01");
-    statEl.textContent = statEl.dataset.prefix;
-    btn.disabled = true;
+    bleDev = dev;
+    paintConnected(dev.name || "CaneA01");
     dev.addEventListener("gattserverdisconnected", () => {
-      statEl.textContent = "断开了，重新点连接";
-      btn.disabled = false;
+      bleDev = null;
+      paintDisconnected("断开了，重新点连接");
     });
   }catch(e){
     statEl.textContent = "连接失败：" + e.message;
   }
 }
-btn.onclick = connect;
 
 /* 回放：没有硬件也能把界面跑起来（答辩兜底） */
 let replayTimer = null;
@@ -705,33 +750,50 @@ document.getElementById("btnReplay").onclick = function(){
   }, 20);
 };
 
-/* ============ 5.6 手机测试模式：手机自带传感器喂曲线 ============ */
+/* ============ 5.6 智能拐杖：用手机自带传感器喂曲线（连上就是这个） ============ */
 // 手机没有压力传感器，三条里两条是真的（合加速度、高频抖动），掌压为模拟值。
+// 桌面上也有 DeviceMotionEvent，但永远不来数据，所以先探一下有没有真的传感器。
 let phoneActive = false, phoneEma = null;
-const btnPhone = document.getElementById("btnPhone");
-btnPhone.onclick = async function(){
-  if (phoneActive){ stopPhone(); return; }
-  const DM = window.DeviceMotionEvent;
-  if (!DM){ addLine("这台手机读不到运动传感器，用不了这个模式。", true); return; }
-  try{
-    if (typeof DM.requestPermission === "function"){
-      const r = await DM.requestPermission();
-      if (r !== "granted"){ addLine("运动权限没给，试不了。去设置里把「运动与健身」打开再点一次。", true); return; }
-    }
-  }catch(e){ /* 老浏览器没有权限这步，直接往下 */ }
+
+function beginPhone(){
   if (replayTimer) document.getElementById("btnReplay").click();   // 别跟回放抢同一根窗口
   phoneActive = true;
   phoneEma = null;
   addEventListener("devicemotion", phoneOnMotion);
-  this.textContent = "停测试";
-  statEl.dataset.prefix = "手机测试（本机传感器）";
-  statEl.textContent = statEl.dataset.prefix;
-};
+}
+
+function probeMotion(){
+  return new Promise((resolve) => {
+    let got = false;
+    const probe = (e) => {
+      const a = e.accelerationIncludingGravity || e.acceleration;
+      if (a && a.x != null) got = true;
+    };
+    addEventListener("devicemotion", probe);
+    setTimeout(() => {
+      removeEventListener("devicemotion", probe);
+      if (!got) resolve(false);
+      else { beginPhone(); resolve(true); }
+    }, 1000);
+  });
+}
+
+async function startPhone(){
+  const DM = window.DeviceMotionEvent;
+  if (!DM) return false;
+  if (typeof DM.requestPermission === "function"){
+    try{
+      const r = await DM.requestPermission();
+      if (r !== "granted"){ addLine("运动权限没给，去设置里把「运动与健身」打开，再点一次连接。", true); return false; }
+    }catch(e){ /* 老浏览器没有权限这步，直接往下 */ }
+  }
+  return await probeMotion();
+}
 
 function stopPhone(){
+  if (!phoneActive) return;
   phoneActive = false;
   removeEventListener("devicemotion", phoneOnMotion);
-  btnPhone.textContent = "手机测试";
 }
 
 function phoneOnMotion(e){
