@@ -759,6 +759,9 @@ function beginPhone(){
   if (replayTimer) document.getElementById("btnReplay").click();   // 别跟回放抢同一根窗口
   phoneActive = true;
   phoneEma = null;
+  calRef = null;                        // 换了数据源，竖直参考重学
+  autoRef = null;
+  refLearnUntil = performance.now() + 3000;   // 头 3 秒把当前姿势当竖直
   addEventListener("devicemotion", phoneOnMotion);
 }
 
@@ -800,14 +803,17 @@ function phoneOnMotion(e){
   const a = e.accelerationIncludingGravity || e.acceleration;
   if (!a || a.x == null) return;
   const g0 = 9.81;
+  const K = 4096 / g0;
   const mag = Math.hypot(a.x, a.y, a.z) / g0;            // 合加速度，静止≈1g，磕碰会飙
   if (phoneEma == null) phoneEma = mag;
   phoneEma += (mag - phoneEma) * 0.05;                   // 慢滑均值 ≈ 重力基线
   const jolt = mag - phoneEma;                           // 高频抖动，走路/磕碰才跳
   const fsrSim = 1200 + 500 * Math.max(0, jolt) + Math.random()*60;   // 掌压模拟值
+  // 重力方向原样当「杖尖」发出去：倾角、跌倒判定全靠它，只发合加速度的话倾角永远是 0
+  const vx = Math.round(a.x * K), vy = Math.round(a.y * K), vz = Math.round(a.z * K);
   onPacket(
-    [0, 0, Math.round(4096 * mag)],
-    [0, 0, Math.round(4096 * (1 + jolt * 2))],
+    [vx, vy, vz],
+    [Math.round(vx * 0.8), vy, Math.round(vz * 0.98)],
     Math.round(fsrSim),
     performance.now()
   );
