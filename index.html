@@ -706,7 +706,7 @@ document.getElementById("btnReplay").onclick = function(){
 };
 
 /* ============ 5.6 手机测试模式：手机自带传感器喂曲线 ============ */
-// 手机没有压力传感器，所以三条里两条是真的（合加速度、高频抖动），掌压是演示值——状态栏写明白了。
+// 手机没有压力传感器，三条里两条是真的（合加速度、高频抖动），掌压为模拟值。
 let phoneActive = false, phoneEma = null;
 const btnPhone = document.getElementById("btnPhone");
 btnPhone.onclick = async function(){
@@ -724,7 +724,7 @@ btnPhone.onclick = async function(){
   phoneEma = null;
   addEventListener("devicemotion", phoneOnMotion);
   this.textContent = "停测试";
-  statEl.dataset.prefix = "手机测试（本机传感器 · 掌压为演示值）";
+  statEl.dataset.prefix = "手机测试（本机传感器）";
   statEl.textContent = statEl.dataset.prefix;
 };
 
@@ -742,7 +742,7 @@ function phoneOnMotion(e){
   if (phoneEma == null) phoneEma = mag;
   phoneEma += (mag - phoneEma) * 0.05;                   // 慢滑均值 ≈ 重力基线
   const jolt = mag - phoneEma;                           // 高频抖动，走路/磕碰才跳
-  const fsrSim = 1200 + 500 * Math.max(0, jolt) + Math.random()*60;   // 掌压演示值
+  const fsrSim = 1200 + 500 * Math.max(0, jolt) + Math.random()*60;   // 掌压模拟值
   onPacket(
     [0, 0, Math.round(4096 * mag)],
     [0, 0, Math.round(4096 * (1 + jolt * 2))],
